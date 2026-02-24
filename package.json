@@ -1,0 +1,20 @@
+{
+  "name": "polymarket-arb-scanner",
+  "version": "1.0.0",
+  "description": "Polymarket BTC arbitrage opportunity scanner",
+  "scripts": {
+    "start": "ts-node src/index.ts",
+    "build": "tsc",
+    "start:prod": "node dist/index.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "ws": "^8.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/ws": "^8.0.0",
+    "ts-node": "^10.0.0",
+    "typescript": "^5.0.0"
+  }
+}

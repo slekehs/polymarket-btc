@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+arb_log.csv
+scanner.log
+*.log
+.cursor/
