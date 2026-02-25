@@ -55,15 +55,31 @@ async fn run(cfg: Config) -> Result<()> {
     info!("Database ready at {}", cfg.db_path);
 
     // --- REST bootstrap: fetch filtered active markets ---
-    let markets = fetch_markets(&cfg).await?;
+    let (markets, stats) = fetch_markets(&cfg).await?;
     info!(
-        "Bootstrap complete: {} markets (min_vol=${:.0}, min_liq=${:.0}, expiry={:.0}m-{:.0}h)",
+        "Bootstrap complete: {} markets from {} API results (min_vol=${:.0}, min_liq=${:.0}, expiry={:.0}m-{:.0}h)",
         markets.len(),
+        stats.api_total,
         cfg.scanner_min_volume_24h,
         cfg.scanner_min_liquidity,
         cfg.scanner_min_expiry_minutes,
         cfg.scanner_max_expiry_hours,
     );
+    info!(
+        "[FILTER] rejected: no_tokens={} no_outcomes={} low_volume={} low_liquidity={} expiry={}",
+        stats.rejected_no_tokens,
+        stats.rejected_no_outcomes,
+        stats.rejected_low_volume,
+        stats.rejected_low_liquidity,
+        stats.rejected_expiry,
+    );
+    if !stats.outcome_samples.is_empty() {
+        info!("[FILTER] sample of {} markets rejected by outcomes (showing labels we don't recognize):", stats.outcome_samples.len());
+        for (q, outcomes) in &stats.outcome_samples {
+            let q_short = if q.len() > 60 { &q[..60] } else { q };
+            info!("[FILTER]   \"{q_short}\" → outcomes: {outcomes:?}");
+        }
+    }
 
     // --- In-memory market store ---
     let store = MarketStore::new();

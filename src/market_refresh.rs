@@ -41,7 +41,17 @@ impl MarketRefresher {
     }
 
     async fn refresh(&self) -> crate::error::Result<()> {
-        let fresh_markets = fetch_markets(&self.cfg).await?;
+        let (fresh_markets, stats) = fetch_markets(&self.cfg).await?;
+        info!(
+            "[REFRESH FILTER] {} API results → {} qualified | rejected: no_tokens={} no_outcomes={} low_vol={} low_liq={} expiry={}",
+            stats.api_total,
+            stats.qualified,
+            stats.rejected_no_tokens,
+            stats.rejected_no_outcomes,
+            stats.rejected_low_volume,
+            stats.rejected_low_liquidity,
+            stats.rejected_expiry,
+        );
 
         let current_ids: HashSet<String> = self.store.all_market_ids().into_iter().collect();
         let fresh_ids: HashSet<String> = fresh_markets.iter().map(|m| m.id.clone()).collect();

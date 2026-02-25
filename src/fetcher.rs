@@ -1,17 +1,30 @@
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::config::{CLOB_API_URL, Config};
 use crate::error::{AppError, Result};
 use crate::state::market_store::MarketStore;
 use crate::types::{Category, Market};
 
+#[derive(Debug, Default)]
+pub struct FetchStats {
+    pub api_total: usize,
+    pub rejected_no_tokens: usize,
+    pub rejected_no_outcomes: usize,
+    pub rejected_low_volume: usize,
+    pub rejected_low_liquidity: usize,
+    pub rejected_expiry: usize,
+    pub qualified: usize,
+    /// Sample of (question, outcomes) rejected by the no_outcomes filter.
+    pub outcome_samples: Vec<(String, Vec<String>)>,
+}
+
 /// Fetch active markets from the GAMMA REST API, applying quality filters.
 /// Orders by volume_24hr descending so we fill `scanner_max_markets` with the
 /// highest-activity markets first, then stops once the cap is reached.
-pub async fn fetch_markets(cfg: &Config) -> Result<Vec<Market>> {
+pub async fn fetch_markets(cfg: &Config) -> Result<(Vec<Market>, FetchStats)> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .build()?;
@@ -24,6 +37,7 @@ pub async fn fetch_markets(cfg: &Config) -> Result<Vec<Market>> {
     let max_expiry_secs = cfg.scanner_max_expiry_hours * 3600.0;
 
     let mut markets = Vec::new();
+    let mut stats = FetchStats::default();
     let mut offset = 0usize;
     let page_size = 500usize;
 
@@ -48,12 +62,28 @@ pub async fn fetch_markets(cfg: &Config) -> Result<Vec<Market>> {
             break;
         }
 
+        stats.api_total += items.len();
+
         for item in &items {
-            if let Some(market) = parse_gamma_market(item, cfg, now, min_expiry_secs, max_expiry_secs) {
-                markets.push(market);
-                if markets.len() >= cfg.scanner_max_markets {
-                    break 'outer;
+            match parse_gamma_market_checked(item, cfg, now, min_expiry_secs, max_expiry_secs) {
+                Ok(market) => {
+                    markets.push(market);
+                    if markets.len() >= cfg.scanner_max_markets {
+                        break 'outer;
+                    }
                 }
+                Err(rejection) => match rejection {
+                    Rejection::NoTokens => stats.rejected_no_tokens += 1,
+                    Rejection::NoOutcomes(q, outcomes) => {
+                        stats.rejected_no_outcomes += 1;
+                        if stats.outcome_samples.len() < 10 {
+                            stats.outcome_samples.push((q, outcomes));
+                        }
+                    }
+                    Rejection::LowVolume => stats.rejected_low_volume += 1,
+                    Rejection::LowLiquidity => stats.rejected_low_liquidity += 1,
+                    Rejection::Expiry => stats.rejected_expiry += 1,
+                },
             }
         }
 
@@ -63,7 +93,8 @@ pub async fn fetch_markets(cfg: &Config) -> Result<Vec<Market>> {
         offset += page_size;
     }
 
-    Ok(markets)
+    stats.qualified = markets.len();
+    Ok((markets, stats))
 }
 
 /// Fetch all active markets whose slug starts with any of the given prefixes.
@@ -157,14 +188,17 @@ pub fn parse_gamma_market_unfiltered(v: &serde_json::Value) -> Option<Market> {
         return None;
     }
 
-    // Rolling crypto markets use "Up"/"Down" instead of "Yes"/"No".
-    // "Up" maps to the yes (long) side, "Down" to the no (short) side.
     let yes_idx = outcomes.iter().position(|o| {
         o.eq_ignore_ascii_case("Yes") || o.eq_ignore_ascii_case("Up")
-    })?;
+    });
     let no_idx = outcomes.iter().position(|o| {
         o.eq_ignore_ascii_case("No") || o.eq_ignore_ascii_case("Down")
-    })?;
+    });
+    let (yes_idx, no_idx) = match (yes_idx, no_idx) {
+        (Some(y), Some(n)) => (y, n),
+        _ if outcomes.len() == 2 => (0, 1),
+        _ => return None,
+    };
     let yes_token_id = token_ids.get(yes_idx)?.clone();
     let no_token_id = token_ids.get(no_idx)?.clone();
 
@@ -203,41 +237,59 @@ pub fn parse_gamma_market_unfiltered(v: &serde_json::Value) -> Option<Market> {
     })
 }
 
-pub fn parse_gamma_market(
+enum Rejection {
+    NoTokens,
+    NoOutcomes(String, Vec<String>),
+    LowVolume,
+    LowLiquidity,
+    Expiry,
+}
+
+fn parse_gamma_market_checked(
     v: &serde_json::Value,
     cfg: &Config,
     now_secs: f64,
     min_expiry_secs: f64,
     max_expiry_secs: f64,
-) -> Option<Market> {
-    let id = v.get("conditionId")?.as_str()?.to_string();
-
-    let token_ids: Vec<String> = serde_json::from_str(
-        v.get("clobTokenIds")?.as_str()?
-    ).ok()?;
-    let outcomes: Vec<String> = serde_json::from_str(
-        v.get("outcomes")?.as_str()?
-    ).ok()?;
-
-    if token_ids.len() < 2 || outcomes.len() < 2 {
-        return None;
+) -> std::result::Result<Market, Rejection> {
+    let token_ids: Vec<String> = v
+        .get("clobTokenIds")
+        .and_then(|s| s.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
+    if token_ids.len() < 2 {
+        return Err(Rejection::NoTokens);
     }
+
+    let outcomes: Vec<String> = v
+        .get("outcomes")
+        .and_then(|s| s.as_str())
+        .and_then(|s| serde_json::from_str(s).ok())
+        .unwrap_or_default();
 
     let yes_idx = outcomes.iter().position(|o| {
         o.eq_ignore_ascii_case("Yes") || o.eq_ignore_ascii_case("Up")
-    })?;
+    });
     let no_idx = outcomes.iter().position(|o| {
         o.eq_ignore_ascii_case("No") || o.eq_ignore_ascii_case("Down")
-    })?;
-    let yes_token_id = token_ids.get(yes_idx)?.clone();
-    let no_token_id = token_ids.get(no_idx)?.clone();
+    });
+    let (yes_idx, no_idx) = match (yes_idx, no_idx) {
+        (Some(y), Some(n)) => (y, n),
+        _ if outcomes.len() == 2 => (0, 1),
+        _ => {
+            let q = v.get("question").and_then(|q| q.as_str()).unwrap_or("?").to_string();
+            return Err(Rejection::NoOutcomes(q, outcomes));
+        }
+    };
+    let yes_token_id = token_ids[yes_idx].clone();
+    let no_token_id = token_ids[no_idx].clone();
 
     let volume_24h = v
         .get("volume24hr")
         .and_then(|x| x.as_f64().or_else(|| x.as_str().and_then(|s| s.parse().ok())))
         .unwrap_or(0.0);
     if volume_24h < cfg.scanner_min_volume_24h {
-        return None;
+        return Err(Rejection::LowVolume);
     }
 
     let liquidity = v
@@ -245,7 +297,7 @@ pub fn parse_gamma_market(
         .and_then(|x| x.as_f64().or_else(|| x.as_str().and_then(|s| s.parse().ok())))
         .unwrap_or(0.0);
     if liquidity < cfg.scanner_min_liquidity {
-        return None;
+        return Err(Rejection::LowLiquidity);
     }
 
     let end_date_iso = v
@@ -258,13 +310,18 @@ pub fn parse_gamma_market(
             Some(end_secs) => {
                 let secs_until = end_secs - now_secs;
                 if secs_until < min_expiry_secs || secs_until > max_expiry_secs {
-                    return None;
+                    return Err(Rejection::Expiry);
                 }
             }
-            None => return None,
+            None => return Err(Rejection::Expiry),
         }
     } else {
-        return None;
+        return Err(Rejection::Expiry);
+    }
+
+    let id = v.get("conditionId").and_then(|s| s.as_str()).unwrap_or("").to_string();
+    if id.is_empty() {
+        return Err(Rejection::NoTokens);
     }
 
     let question = v
@@ -288,7 +345,7 @@ pub fn parse_gamma_market(
             vl.as_f64().or_else(|| vl.as_str().and_then(|s| s.parse().ok()))
         });
 
-    Some(Market {
+    Ok(Market {
         id,
         question,
         category,
@@ -297,6 +354,17 @@ pub fn parse_gamma_market(
         yes_token_id,
         no_token_id,
     })
+}
+
+/// Thin wrapper preserving the old signature for callers that don't need stats.
+pub fn parse_gamma_market(
+    v: &serde_json::Value,
+    cfg: &Config,
+    now_secs: f64,
+    min_expiry_secs: f64,
+    max_expiry_secs: f64,
+) -> Option<Market> {
+    parse_gamma_market_checked(v, cfg, now_secs, min_expiry_secs, max_expiry_secs).ok()
 }
 
 /// Fetch the CLOB REST order book for a sample of tokens and compare against

@@ -26,7 +26,7 @@ pub const CHANNEL_CAPACITY: usize = 1024;
 pub const SCORER_INTERVAL_SECS: u64 = 60;
 
 /// Market refresh interval (seconds) — how often to re-fetch qualifying markets from Gamma.
-pub const MARKET_REFRESH_INTERVAL_SECS: u64 = 300;
+pub const MARKET_REFRESH_INTERVAL_SECS: u64 = 60;
 
 
 /// Maximum asset IDs per WS subscribe frame to avoid server-side size limits.
