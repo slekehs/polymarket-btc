@@ -36,6 +36,7 @@ pub struct SpreadDetector {
     price_rx: mpsc::Receiver<PriceChangeMsg>,
     trade_rx: mpsc::Receiver<TradeMsg>,
     window_tx: mpsc::Sender<WindowEvent>,
+    latency_stats: Arc<crate::api::latency::LatencyStats>,
     /// market_id → active window state
     active_windows: HashMap<String, ActiveWindow>,
     /// Detector-local price cache: asset_id → (best_ask, best_bid).
@@ -61,6 +62,7 @@ impl SpreadDetector {
         price_rx: mpsc::Receiver<PriceChangeMsg>,
         trade_rx: mpsc::Receiver<TradeMsg>,
         window_tx: mpsc::Sender<WindowEvent>,
+        latency_stats: Arc<crate::api::latency::LatencyStats>,
     ) -> Self {
         let now = Instant::now();
         Self {
@@ -68,6 +70,7 @@ impl SpreadDetector {
             price_rx,
             trade_rx,
             window_tx,
+            latency_stats,
             active_windows: HashMap::new(),
             local_prices: HashMap::new(),
             price_msgs_processed: 0,
@@ -242,6 +245,7 @@ impl SpreadDetector {
         self.maybe_log_diagnostics();
 
         let detect_elapsed = msg.received_at.elapsed();
+        self.latency_stats.record(detect_elapsed);
 
         // Every tick at debug level — use LOG_LEVEL=debug to see the full feed.
         let mid = &market_id;
@@ -316,11 +320,12 @@ impl SpreadDetector {
                 self.windows_closed += 1;
                 let window = self.active_windows.remove(&market_id).unwrap();
                 let dur_ms = (msg.received_at_ns.saturating_sub(window.opened_at_ns)) as f64 / 1_000_000.0;
+                let detection_latency_us = detect_elapsed.as_micros().min(u128::from(u64::MAX)) as u64;
                 info!(
                     "\x1b[31m<<< WINDOW CLOSED  | {id_short} | ticks={} | {dur_ms:.0}ms | spread was +{:.4}\x1b[0m",
                     window.tick_count, window.spread,
                 );
-                self.emit_close(market_id, window, msg.received_at_ns).await;
+                self.emit_close(market_id, window, msg.received_at_ns, detection_latency_us).await;
             }
 
             (false, false) => {
@@ -342,7 +347,13 @@ impl SpreadDetector {
         }
     }
 
-    async fn emit_close(&self, market_id: String, window: ActiveWindow, closed_at_ns: u64) {
+    async fn emit_close(
+        &self,
+        market_id: String,
+        window: ActiveWindow,
+        closed_at_ns: u64,
+        detection_latency_us: u64,
+    ) {
         let duration_ms = (closed_at_ns.saturating_sub(window.opened_at_ns)) as f64 / 1_000_000.0;
 
         let obs = WindowObservables {
@@ -369,6 +380,7 @@ impl SpreadDetector {
             close_reason,
             opportunity_class: opp_class,
             observables: obs,
+            detection_latency_us,
         });
 
         if let Err(e) = self.window_tx.try_send(event) {
@@ -387,6 +399,7 @@ fn now_ns() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::api::latency::LatencyStats;
     use crate::state::MarketStore;
     use crate::types::{Category, Market, OpenDurationClass};
 
@@ -421,7 +434,14 @@ mod tests {
         let (_trade_tx, trade_rx) = mpsc::channel(16);
         let (window_tx, mut window_rx) = mpsc::channel(16);
 
-        let mut detector = SpreadDetector::new(store.clone(), price_rx, trade_rx, window_tx);
+        let latency_stats = Arc::new(LatencyStats::new());
+        let mut detector = SpreadDetector::new(
+            store.clone(),
+            price_rx,
+            trade_rx,
+            window_tx,
+            latency_stats,
+        );
 
         // Seed no-side in detector's local cache
         detector.handle_price_change(price_msg("no1", 0.45)).await;
@@ -449,7 +469,14 @@ mod tests {
         let (_trade_tx, trade_rx) = mpsc::channel(16);
         let (window_tx, mut window_rx) = mpsc::channel(16);
 
-        let mut detector = SpreadDetector::new(store.clone(), price_rx, trade_rx, window_tx);
+        let latency_stats = Arc::new(LatencyStats::new());
+        let mut detector = SpreadDetector::new(
+            store.clone(),
+            price_rx,
+            trade_rx,
+            window_tx,
+            latency_stats,
+        );
 
         // Seed no-side in detector's local cache
         detector.handle_price_change(price_msg("no1", 0.45)).await;

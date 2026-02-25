@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n        SELECT id, market_id, opened_at, closed_at, duration_ms,\n               spread_size, spread_category, open_duration_class, close_reason, opportunity_class\n        FROM windows\n        WHERE spread_size >= ?\n        ORDER BY opened_at DESC\n        LIMIT ?\n        ",
+  "query": "\n        SELECT id, market_id, opened_at, closed_at, duration_ms,\n               spread_size, spread_category, open_duration_class, close_reason, opportunity_class,\n               detection_latency_us\n        FROM windows\n        WHERE market_id = ? AND opened_at > ?\n        ORDER BY opened_at DESC\n        LIMIT ?\n        ",
   "describe": {
     "columns": [
       {
@@ -52,10 +52,15 @@
         "name": "opportunity_class",
         "ordinal": 9,
         "type_info": "Integer"
+      },
+      {
+        "name": "detection_latency_us",
+        "ordinal": 10,
+        "type_info": "Integer"
       }
     ],
     "parameters": {
-      "Right": 2
+      "Right": 3
     },
     "nullable": [
       true,
@@ -67,8 +72,9 @@
       true,
       true,
       true,
+      true,
       true
     ]
   },
-  "hash": "36ddd768e230203ea6880b9c05f1564838dac6f466f6def10418240d3f703f83"
+  "hash": "ec57eceeb3f8fb4b2f8a8dac5d9f6d8eed87df33623e402ba0c3ed5501f809c8"
 }

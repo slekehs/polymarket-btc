@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            UPDATE windows\n            SET closed_at = ?, duration_ms = ?, open_duration_class = ?, close_reason = ?,\n                tick_count = ?, volume_changed = ?, volume_change_ticks = ?, price_shifted = ?,\n                opportunity_class = ?, detection_latency_us = ?,\n                yes_ask = ?, no_ask = ?, combined_cost = ?, spread_size = ?, spread_category = ?\n            WHERE market_id = ? AND opened_at = ? AND closed_at IS NULL\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 17
+    },
+    "nullable": []
+  },
+  "hash": "ae9f73d2590a1fbc831e8dc5ef6f3a5493f05efe58aec03af928219be4f20978"
+}

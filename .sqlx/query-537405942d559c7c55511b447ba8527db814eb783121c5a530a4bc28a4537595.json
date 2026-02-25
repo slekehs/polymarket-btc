@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "\n        SELECT m.id, m.question, m.category,\n               ms.windows_24h, ms.avg_window_duration_ms, ms.avg_spread_size,\n               ms.noise_ratio, ms.opportunity_score\n        FROM markets m\n        LEFT JOIN market_stats ms ON m.id = ms.market_id\n        WHERE ms.opportunity_score IS NULL OR ms.opportunity_score >= ?\n        ORDER BY ms.opportunity_score DESC NULLS LAST\n        ",
+  "query": "\n        SELECT m.id, m.question, m.category,\n               ms.windows_24h, ms.p1_windows_24h, ms.p2_windows_24h,\n               ms.avg_window_duration_ms, ms.avg_spread_size,\n               ms.noise_ratio, ms.opportunity_score\n        FROM markets m\n        LEFT JOIN market_stats ms ON m.id = ms.market_id\n        ORDER BY ms.opportunity_score DESC NULLS LAST\n        LIMIT 10\n        ",
   "describe": {
     "columns": [
       {
@@ -24,28 +24,38 @@
         "type_info": "Integer"
       },
       {
-        "name": "avg_window_duration_ms",
+        "name": "p1_windows_24h",
         "ordinal": 4,
-        "type_info": "Float"
+        "type_info": "Integer"
       },
       {
-        "name": "avg_spread_size",
+        "name": "p2_windows_24h",
         "ordinal": 5,
-        "type_info": "Float"
+        "type_info": "Integer"
       },
       {
-        "name": "noise_ratio",
+        "name": "avg_window_duration_ms",
         "ordinal": 6,
         "type_info": "Float"
       },
       {
-        "name": "opportunity_score",
+        "name": "avg_spread_size",
         "ordinal": 7,
+        "type_info": "Float"
+      },
+      {
+        "name": "noise_ratio",
+        "ordinal": 8,
+        "type_info": "Float"
+      },
+      {
+        "name": "opportunity_score",
+        "ordinal": 9,
         "type_info": "Float"
       }
     ],
     "parameters": {
-      "Right": 1
+      "Right": 0
     },
     "nullable": [
       true,
@@ -55,8 +65,10 @@
       true,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "da5610950cdf28f27d200b498a9aecdee698845d095d3d5317744878157792c3"
+  "hash": "537405942d559c7c55511b447ba8527db814eb783121c5a530a4bc28a4537595"
 }

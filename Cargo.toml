@@ -29,7 +29,7 @@ serde_json = "1"
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
 
 # HTTP server
-axum = { version = "0.7", features = ["macros"] }
+axum = { version = "0.7", features = ["macros", "ws", "json"] }
 
 # Concurrency — in-memory market state
 dashmap = "6"
@@ -40,6 +40,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
 # Errors
 thiserror = "2"
+
+# Latency histogram
+hdrhistogram = "7"
 
 # Misc
 futures-util = "0.3"

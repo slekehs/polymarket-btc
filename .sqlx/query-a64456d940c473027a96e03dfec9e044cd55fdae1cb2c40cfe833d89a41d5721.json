@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            SELECT\n                market_id,\n                COUNT(*) as windows_24h,\n                SUM(CASE WHEN opportunity_class = 1 THEN 1 ELSE 0 END) as p1_windows_24h,\n                SUM(CASE WHEN opportunity_class = 2 THEN 1 ELSE 0 END) as p2_windows_24h,\n                AVG(duration_ms) as avg_duration_ms,\n                AVG(spread_size) as avg_spread,\n                MAX(spread_size) as max_spread,\n                CAST(SUM(CASE WHEN open_duration_class = 'single_tick' THEN 1 ELSE 0 END) AS REAL)\n                    / CAST(COUNT(*) AS REAL) as noise_ratio\n            FROM windows\n            WHERE opened_at > ?\n            GROUP BY market_id\n            ",
+  "describe": {
+    "columns": [
+      {
+        "name": "market_id",
+        "ordinal": 0,
+        "type_info": "Text"
+      },
+      {
+        "name": "windows_24h",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "p1_windows_24h",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "p2_windows_24h",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "avg_duration_ms",
+        "ordinal": 4,
+        "type_info": "Float"
+      },
+      {
+        "name": "avg_spread",
+        "ordinal": 5,
+        "type_info": "Float"
+      },
+      {
+        "name": "max_spread",
+        "ordinal": 6,
+        "type_info": "Float"
+      },
+      {
+        "name": "noise_ratio",
+        "ordinal": 7,
+        "type_info": "Float"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "a64456d940c473027a96e03dfec9e044cd55fdae1cb2c40cfe833d89a41d5721"
+}

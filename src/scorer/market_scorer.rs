@@ -43,6 +43,8 @@ impl MarketScorer {
             SELECT
                 market_id,
                 COUNT(*) as windows_24h,
+                SUM(CASE WHEN opportunity_class = 1 THEN 1 ELSE 0 END) as p1_windows_24h,
+                SUM(CASE WHEN opportunity_class = 2 THEN 1 ELSE 0 END) as p2_windows_24h,
                 AVG(duration_ms) as avg_duration_ms,
                 AVG(spread_size) as avg_spread,
                 MAX(spread_size) as max_spread,
@@ -61,17 +63,28 @@ impl MarketScorer {
             let avg_duration = row.avg_duration_ms.unwrap_or(0.0);
             let avg_spread = row.avg_spread;
             let noise = row.noise_ratio;
-            let score = compute_score(row.windows_24h, avg_duration, avg_spread, noise);
+            let p1 = row.p1_windows_24h;
+            let p2 = row.p2_windows_24h;
+            let score = compute_score(
+                row.windows_24h,
+                p1,
+                p2,
+                avg_duration,
+                avg_spread,
+                noise,
+            );
 
             sqlx::query!(
                 r#"
                 INSERT INTO market_stats (
-                    market_id, windows_24h, avg_window_duration_ms,
-                    avg_spread_size, max_spread_size, noise_ratio,
+                    market_id, windows_24h, p1_windows_24h, p2_windows_24h,
+                    avg_window_duration_ms, avg_spread_size, max_spread_size, noise_ratio,
                     opportunity_score, last_updated
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(market_id) DO UPDATE SET
                     windows_24h = excluded.windows_24h,
+                    p1_windows_24h = excluded.p1_windows_24h,
+                    p2_windows_24h = excluded.p2_windows_24h,
                     avg_window_duration_ms = excluded.avg_window_duration_ms,
                     avg_spread_size = excluded.avg_spread_size,
                     max_spread_size = excluded.max_spread_size,
@@ -81,6 +94,8 @@ impl MarketScorer {
                 "#,
                 row.market_id,
                 row.windows_24h,
+                p1,
+                p2,
                 row.avg_duration_ms,
                 row.avg_spread,
                 row.max_spread,
@@ -98,10 +113,19 @@ impl MarketScorer {
 }
 
 /// Composite opportunity score (higher = better market to watch).
-/// Factors: window frequency, average duration, spread size, noise ratio.
-fn compute_score(windows_24h: i64, avg_duration_ms: f64, avg_spread: f64, noise_ratio: f64) -> f64 {
-    // Normalize and weight each factor
-    let frequency_score = (windows_24h as f64).min(50.0) / 50.0 * 30.0;
+/// Factors: quality-weighted window frequency (P1=2x, P2=1.5x), duration, spread, noise.
+fn compute_score(
+    windows_24h: i64,
+    p1_windows: i64,
+    p2_windows: i64,
+    avg_duration_ms: f64,
+    avg_spread: f64,
+    noise_ratio: f64,
+) -> f64 {
+    // Quality-weighted frequency: P1 counts 2x, P2 counts 1.5x
+    let other_windows = (windows_24h - p1_windows - p2_windows).max(0) as f64;
+    let weighted_count = (p1_windows as f64) * 2.0 + (p2_windows as f64) * 1.5 + other_windows;
+    let frequency_score = weighted_count.min(75.0) / 75.0 * 30.0;
     let duration_score = (avg_duration_ms / 2000.0).min(1.0) * 30.0;
     let spread_score = (avg_spread / 0.10).min(1.0) * 25.0;
     let noise_penalty = noise_ratio * 15.0;

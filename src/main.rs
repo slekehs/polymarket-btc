@@ -12,10 +12,12 @@ mod api;
 
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
-use tokio::sync::mpsc;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
 use tracing_subscriber::EnvFilter;
 
+use crate::api::health::HealthState;
+use crate::api::latency::LatencyStats;
 use crate::api::routes::{ApiState, router};
 use crate::config::{Config, CHANNEL_CAPACITY};
 use crate::db::writer::DbWriter;
@@ -48,10 +50,46 @@ async fn main() {
     }
 }
 
+/// Run migrations. On "duplicate column" (column already added manually), mark migration applied and retry.
+async fn run_migrations(pool: &sqlx::SqlitePool) -> Result<()> {
+    let migrator = sqlx::migrate!("./migrations");
+    loop {
+        match migrator.run(pool).await {
+            Ok(()) => return Ok(()),
+            Err(ref e) if e.to_string().contains("duplicate column") => {
+                let msg = e.to_string();
+                let version = msg
+                    .split("migration ")
+                    .nth(1)
+                    .and_then(|s| s.split(':').next())
+                    .and_then(|s| s.trim().parse::<i64>().ok())
+                    .expect("parse migration version from error");
+                info!(
+                    "Migration {} already applied (column exists); marking as applied and retrying",
+                    version
+                );
+                let m = migrator
+                    .iter()
+                    .find(|x| x.version == version)
+                    .expect("migration version from migrator");
+                sqlx::query(
+                    "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (?, ?, 1, ?, -1)",
+                )
+                .bind(m.version)
+                .bind(m.description.as_ref())
+                .bind(m.checksum.as_ref())
+                .execute(pool)
+                .await?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+    }
+}
+
 async fn run(cfg: Config) -> Result<()> {
     // --- Database setup ---
     let pool = sqlx::SqlitePool::connect(&format!("sqlite:{}", cfg.db_path)).await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    run_migrations(&pool).await?;
     info!("Database ready at {}", cfg.db_path);
 
     // --- REST bootstrap: fetch filtered active markets ---
@@ -113,6 +151,11 @@ async fn run(cfg: Config) -> Result<()> {
         info!("Pinned slugs configured ({}): PinnedMarketWatcher will subscribe on first tick.", cfg.pinned_slugs.join(", "));
     }
 
+    // --- Shared state for API ---
+    let latency_stats = Arc::new(LatencyStats::new());
+    let health = Arc::new(HealthState::new());
+    let (window_broadcast_tx, _) = broadcast::channel::<WindowEvent>(256);
+
     // --- Channels ---
     let (price_tx, price_rx) = mpsc::channel(CHANNEL_CAPACITY);
     let (trade_tx, trade_rx) = mpsc::channel(CHANNEL_CAPACITY);
@@ -128,6 +171,7 @@ async fn run(cfg: Config) -> Result<()> {
         price_tx,
         trade_tx,
         control_rx,
+        Arc::clone(&health),
     );
     tokio::spawn(async move { ws_manager.run().await });
 
@@ -137,13 +181,22 @@ async fn run(cfg: Config) -> Result<()> {
         price_rx,
         trade_rx,
         window_tx,
+        Arc::clone(&latency_stats),
     );
     tokio::spawn(async move { detector.run().await });
 
-    // Window event consumer: telemetry logger + DB writer
+    // Window event consumer: telemetry logger + DB writer + broadcast to WS clients
     let pool_clone = pool.clone();
+    let health_clone = Arc::clone(&health);
+    let window_broadcast_tx_clone = window_broadcast_tx.clone();
     tokio::spawn(async move {
-        window_consumer(window_rx, pool_clone).await;
+        window_consumer(
+            window_rx,
+            pool_clone,
+            health_clone,
+            window_broadcast_tx_clone,
+        )
+        .await;
     });
 
     // Market scorer (background, every 60s)
@@ -172,7 +225,13 @@ async fn run(cfg: Config) -> Result<()> {
     tokio::spawn(async move { pinned_watcher.run().await });
 
     // HTTP API server
-    let api_state = ApiState { pool: pool.clone() };
+    let api_state = ApiState {
+        pool: pool.clone(),
+        latency_stats,
+        health,
+        store,
+        window_broadcast_tx,
+    };
     let app = router(api_state);
     let bind_addr = format!("0.0.0.0:{}", cfg.api_port);
     let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
@@ -183,24 +242,35 @@ async fn run(cfg: Config) -> Result<()> {
     Ok(())
 }
 
-/// Consumes WindowEvents: logs to console and writes closes to DB.
+/// Consumes WindowEvents: logs to console, writes closes to DB, broadcasts to WS clients.
 async fn window_consumer(
     mut rx: mpsc::Receiver<WindowEvent>,
     pool: sqlx::SqlitePool,
+    health: Arc<HealthState>,
+    window_broadcast_tx: broadcast::Sender<WindowEvent>,
 ) {
     let db_writer_tx = {
         let (tx, window_rx) = mpsc::channel::<WindowEvent>(CHANNEL_CAPACITY);
-        let writer = DbWriter::new(pool, window_rx);
+        let writer = DbWriter::new(pool, window_rx, Arc::clone(&health));
         tokio::spawn(async move { writer.run().await });
         tx
     };
 
     while let Some(event) = rx.recv().await {
+        let _ = window_broadcast_tx.send(event.clone());
         match &event {
-            WindowEvent::Open(o) => log_window_open(o),
-            WindowEvent::Close(c) => {
-                log_window_close(c);
+            WindowEvent::Open(o) => {
+                log_window_open(o);
                 if let Err(e) = db_writer_tx.try_send(event) {
+                    warn!("DB writer channel full (open): {e}");
+                }
+            }
+            WindowEvent::Close(c) => {
+                health.set_last_window_at_ns(c.closed_at_ns);
+                log_window_close(c);
+                health.inc_write_queue_pending();
+                if let Err(e) = db_writer_tx.try_send(event) {
+                    health.dec_write_queue_pending();
                     warn!("DB writer channel full: {e}");
                 }
             }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO windows (\n                market_id, opened_at, closed_at, duration_ms,\n                yes_ask, no_ask, combined_cost, spread_size, spread_category,\n                open_duration_class, close_reason,\n                tick_count, volume_changed, volume_change_ticks, price_shifted,\n                opportunity_class, detection_latency_us\n            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 17
+    },
+    "nullable": []
+  },
+  "hash": "f6dda572cc58b368d7e36b8117a38a3bea06f96be101b9e4f5e167647cea8728"
+}

@@ -1,0 +1,2 @@
+ALTER TABLE market_stats ADD COLUMN p1_windows_24h INTEGER DEFAULT 0;
+ALTER TABLE market_stats ADD COLUMN p2_windows_24h INTEGER DEFAULT 0;

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                INSERT INTO market_stats (\n                    market_id, windows_24h, p1_windows_24h, p2_windows_24h,\n                    avg_window_duration_ms, avg_spread_size, max_spread_size, noise_ratio,\n                    opportunity_score, last_updated\n                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)\n                ON CONFLICT(market_id) DO UPDATE SET\n                    windows_24h = excluded.windows_24h,\n                    p1_windows_24h = excluded.p1_windows_24h,\n                    p2_windows_24h = excluded.p2_windows_24h,\n                    avg_window_duration_ms = excluded.avg_window_duration_ms,\n                    avg_spread_size = excluded.avg_spread_size,\n                    max_spread_size = excluded.max_spread_size,\n                    noise_ratio = excluded.noise_ratio,\n                    opportunity_score = excluded.opportunity_score,\n                    last_updated = excluded.last_updated\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "a89270c4ce26017409d18f2c0bbb70f4b22aba1622fdd54d45df91c088d0ff8e"
+}

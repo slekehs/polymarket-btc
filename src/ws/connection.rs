@@ -7,6 +7,7 @@ use tokio::time::interval;
 use tokio_tungstenite::{connect_async, tungstenite::Message};
 use tracing::{debug, error, info, warn};
 
+use crate::api::health::HealthState;
 use crate::config::{RECONNECT_BACKOFF_MS, WS_PING_INTERVAL_SECS, WS_SUBSCRIBE_CHUNK_SIZE};
 use crate::error::Result;
 use crate::state::market_store::MarketStore;
@@ -20,6 +21,7 @@ pub struct WsManager {
     price_tx: mpsc::Sender<PriceChangeMsg>,
     trade_tx: mpsc::Sender<TradeMsg>,
     control_rx: mpsc::Receiver<ControlMsg>,
+    health: Arc<HealthState>,
     /// Total WS frames received since process start (for flow diagnostics).
     frames_received: Arc<AtomicU64>,
     /// Total price events routed to the detector.
@@ -37,6 +39,7 @@ impl WsManager {
         price_tx: mpsc::Sender<PriceChangeMsg>,
         trade_tx: mpsc::Sender<TradeMsg>,
         control_rx: mpsc::Receiver<ControlMsg>,
+        health: Arc<HealthState>,
     ) -> Self {
         Self {
             ws_url,
@@ -44,6 +47,7 @@ impl WsManager {
             price_tx,
             trade_tx,
             control_rx,
+            health,
             frames_received: Arc::new(AtomicU64::new(0)),
             price_msgs_routed: Arc::new(AtomicU64::new(0)),
             book_snapshots: Arc::new(AtomicU64::new(0)),
@@ -79,8 +83,10 @@ impl WsManager {
     }
 
     async fn connect_once(&mut self) -> Result<()> {
+        self.health.set_ws_connected(false);
         let (ws_stream, _) = connect_async(&self.ws_url).await?;
         let (mut write, mut read) = ws_stream.split();
+        self.health.set_ws_connected(true);
 
         // Initial subscription: send in chunks to avoid server-side frame size limits.
         let asset_ids = self.store.all_asset_ids();
@@ -112,9 +118,13 @@ impl WsManager {
                             write.send(Message::Pong(data)).await?;
                         }
                         Some(Ok(Message::Close(_))) | None => {
+                            self.health.set_ws_connected(false);
                             return Ok(());
                         }
-                        Some(Err(e)) => return Err(e.into()),
+                        Some(Err(e)) => {
+                            self.health.set_ws_connected(false);
+                            return Err(e.into());
+                        }
                         Some(Ok(_)) => {}
                     }
                 }
@@ -143,6 +153,7 @@ impl WsManager {
                         }
                         None => {
                             // Control channel dropped — shut down
+                            self.health.set_ws_connected(false);
                             return Ok(());
                         }
                     }
@@ -300,6 +311,7 @@ fn build_subscribe_msg(asset_ids: &[String]) -> String {
 fn build_unsubscribe_msg(asset_ids: &[String]) -> String {
     serde_json::json!({
         "assets_ids": asset_ids,
+        "type": "market",
         "operation": "unsubscribe"
     })
     .to_string()

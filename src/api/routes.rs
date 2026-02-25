@@ -1,15 +1,30 @@
+use std::sync::Arc;
+
 use axum::{
-    extract::{Path, Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, Query, State,
+    },
+    response::IntoResponse,
     routing::get,
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use tokio::sync::broadcast;
 
+use crate::api::health::HealthState;
+use crate::api::latency::LatencyStats;
 use crate::error::AppError;
+use crate::state::MarketStore;
+use crate::types::WindowEvent;
 
 #[derive(Clone)]
 pub struct ApiState {
     pub pool: sqlx::SqlitePool,
+    pub latency_stats: Arc<LatencyStats>,
+    pub health: Arc<HealthState>,
+    pub store: Arc<MarketStore>,
+    pub window_broadcast_tx: broadcast::Sender<WindowEvent>,
 }
 
 pub fn router(state: ApiState) -> Router {
@@ -17,8 +32,11 @@ pub fn router(state: ApiState) -> Router {
         .route("/markets", get(get_markets))
         .route("/markets/:id/windows", get(get_market_windows))
         .route("/windows/recent", get(get_recent_windows))
+        .route("/windows/open", get(get_open_windows))
         .route("/stats/summary", get(get_stats_summary))
         .route("/stats/latency", get(get_stats_latency))
+        .route("/health", get(get_health))
+        .route("/ws/events", get(ws_events_handler))
         .with_state(state)
 }
 
@@ -54,6 +72,8 @@ pub struct MarketResponse {
     pub question: String,
     pub category: Option<String>,
     pub windows_24h: Option<i64>,
+    pub p1_windows_24h: Option<i64>,
+    pub p2_windows_24h: Option<i64>,
     pub avg_window_duration_ms: Option<f64>,
     pub avg_spread_size: Option<f64>,
     pub noise_ratio: Option<f64>,
@@ -72,6 +92,7 @@ pub struct WindowResponse {
     pub open_duration_class: Option<String>,
     pub close_reason: Option<String>,
     pub opportunity_class: Option<i64>,
+    pub detection_latency_us: Option<i64>,
 }
 
 #[derive(Serialize)]
@@ -95,7 +116,8 @@ async fn get_markets(
     let rows = sqlx::query!(
         r#"
         SELECT m.id, m.question, m.category,
-               ms.windows_24h, ms.avg_window_duration_ms, ms.avg_spread_size,
+               ms.windows_24h, ms.p1_windows_24h, ms.p2_windows_24h,
+               ms.avg_window_duration_ms, ms.avg_spread_size,
                ms.noise_ratio, ms.opportunity_score
         FROM markets m
         LEFT JOIN market_stats ms ON m.id = ms.market_id
@@ -119,6 +141,8 @@ async fn get_markets(
             question: r.question,
             category: r.category,
             windows_24h: r.windows_24h,
+            p1_windows_24h: r.p1_windows_24h,
+            p2_windows_24h: r.p2_windows_24h,
             avg_window_duration_ms: r.avg_window_duration_ms,
             avg_spread_size: r.avg_spread_size,
             noise_ratio: r.noise_ratio,
@@ -140,7 +164,8 @@ async fn get_market_windows(
     let rows = sqlx::query!(
         r#"
         SELECT id, market_id, opened_at, closed_at, duration_ms,
-               spread_size, spread_category, open_duration_class, close_reason, opportunity_class
+               spread_size, spread_category, open_duration_class, close_reason, opportunity_class,
+               detection_latency_us
         FROM windows
         WHERE market_id = ? AND opened_at > ?
         ORDER BY opened_at DESC
@@ -166,6 +191,7 @@ async fn get_market_windows(
             open_duration_class: r.open_duration_class,
             close_reason: r.close_reason,
             opportunity_class: r.opportunity_class,
+            detection_latency_us: r.detection_latency_us,
         })
         .collect();
 
@@ -182,7 +208,8 @@ async fn get_recent_windows(
     let rows = sqlx::query!(
         r#"
         SELECT id, market_id, opened_at, closed_at, duration_ms,
-               spread_size, spread_category, open_duration_class, close_reason, opportunity_class
+               spread_size, spread_category, open_duration_class, close_reason, opportunity_class,
+               detection_latency_us
         FROM windows
         WHERE spread_size >= ?
         ORDER BY opened_at DESC
@@ -207,6 +234,41 @@ async fn get_recent_windows(
             open_duration_class: r.open_duration_class,
             close_reason: r.close_reason,
             opportunity_class: r.opportunity_class,
+            detection_latency_us: r.detection_latency_us,
+        })
+        .collect();
+
+    Ok(Json(windows))
+}
+
+async fn get_open_windows(State(state): State<ApiState>) -> Result<Json<Vec<WindowResponse>>, AppError> {
+    let rows = sqlx::query!(
+        r#"
+        SELECT id, market_id, opened_at, closed_at, duration_ms,
+               spread_size, spread_category, open_duration_class, close_reason, opportunity_class,
+               detection_latency_us
+        FROM windows
+        WHERE closed_at IS NULL
+        ORDER BY opened_at DESC
+        "#
+    )
+    .fetch_all(&state.pool)
+    .await?;
+
+    let windows = rows
+        .into_iter()
+        .map(|r| WindowResponse {
+            id: r.id.unwrap_or(0),
+            market_id: r.market_id,
+            opened_at: r.opened_at,
+            closed_at: r.closed_at,
+            duration_ms: r.duration_ms,
+            spread_size: r.spread_size,
+            spread_category: r.spread_category,
+            open_duration_class: r.open_duration_class,
+            close_reason: r.close_reason,
+            opportunity_class: r.opportunity_class,
+            detection_latency_us: r.detection_latency_us,
         })
         .collect();
 
@@ -243,7 +305,8 @@ async fn get_stats_summary(
     let top_rows = sqlx::query!(
         r#"
         SELECT m.id, m.question, m.category,
-               ms.windows_24h, ms.avg_window_duration_ms, ms.avg_spread_size,
+               ms.windows_24h, ms.p1_windows_24h, ms.p2_windows_24h,
+               ms.avg_window_duration_ms, ms.avg_spread_size,
                ms.noise_ratio, ms.opportunity_score
         FROM markets m
         LEFT JOIN market_stats ms ON m.id = ms.market_id
@@ -261,6 +324,8 @@ async fn get_stats_summary(
             question: r.question,
             category: r.category,
             windows_24h: r.windows_24h,
+            p1_windows_24h: r.p1_windows_24h,
+            p2_windows_24h: r.p2_windows_24h,
             avg_window_duration_ms: r.avg_window_duration_ms,
             avg_spread_size: r.avg_spread_size,
             noise_ratio: r.noise_ratio,
@@ -277,13 +342,56 @@ async fn get_stats_summary(
 }
 
 async fn get_stats_latency(
-    State(_state): State<ApiState>,
+    State(state): State<ApiState>,
 ) -> Json<serde_json::Value> {
-    // Placeholder — will be wired to in-memory latency histogram in Phase 1C
+    let (p50, p95, p99) = state.latency_stats.percentiles();
+    let to_ms = |us: Option<u64>| us.map(|u| (u as f64) / 1000.0);
     Json(serde_json::json!({
-        "note": "latency histogram not yet implemented",
-        "p50_ms": null,
-        "p95_ms": null,
-        "p99_ms": null
+        "p50_ms": to_ms(p50),
+        "p95_ms": to_ms(p95),
+        "p99_ms": to_ms(p99),
+        "sample_count": state.latency_stats.len()
     }))
+}
+
+async fn get_health(
+    State(state): State<ApiState>,
+) -> Json<serde_json::Value> {
+    let (_, _, p99) = state.latency_stats.percentiles();
+    let last_ns = state.health.last_window_at_ns();
+    let last_window_at_ns = if last_ns == 0 {
+        serde_json::Value::Null
+    } else {
+        serde_json::Value::Number(serde_json::Number::from(last_ns as i64))
+    };
+    Json(serde_json::json!({
+        "ws_connected": state.health.ws_connected(),
+        "markets_subscribed": state.store.market_count(),
+        "hydrated_markets": state.store.hydrated_market_count(),
+        "total_markets": state.store.market_count(),
+        "last_window_at_ns": last_window_at_ns,
+        "write_queue_pending": state.health.write_queue_pending(),
+        "detection_p99_us": p99,
+    }))
+}
+
+async fn ws_events_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<ApiState>,
+) -> impl IntoResponse {
+    let rx = state.window_broadcast_tx.subscribe();
+    ws.on_upgrade(move |socket| handle_window_events_ws(socket, rx))
+}
+
+async fn handle_window_events_ws(mut socket: WebSocket, mut rx: broadcast::Receiver<WindowEvent>) {
+    while let Ok(event) = rx.recv().await {
+        match serde_json::to_string(&event) {
+            Ok(json) => {
+                if socket.send(Message::Text(json.into())).await.is_err() {
+                    break;
+                }
+            }
+            Err(_) => continue,
+        }
+    }
 }

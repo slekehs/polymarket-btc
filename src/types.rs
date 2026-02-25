@@ -150,7 +150,7 @@ pub fn opportunity_class(open_class: OpenDurationClass, close_reason: Option<Clo
 // Raw observables stored alongside every window
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WindowObservables {
     pub tick_count: u32,
     /// True if a last_trade_price event fired while this window was open.
@@ -165,7 +165,7 @@ pub struct WindowObservables {
 // Window events — sent over mpsc channels between tasks
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WindowOpenEvent {
     pub market_id: String,
     pub yes_ask: f64,
@@ -175,10 +175,11 @@ pub struct WindowOpenEvent {
     /// Nanosecond UTC epoch timestamp.
     pub opened_at_ns: u64,
     /// For latency measurement — not sent over channel.
+    #[serde(skip)]
     pub detected_at: Instant,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct WindowCloseEvent {
     pub market_id: String,
     pub yes_ask: f64,
@@ -192,9 +193,11 @@ pub struct WindowCloseEvent {
     pub close_reason: Option<CloseReason>,
     pub opportunity_class: u8,
     pub observables: WindowObservables,
+    /// Microseconds from WS receive to spread computation for the closing tick.
+    pub detection_latency_us: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub enum WindowEvent {
     Open(WindowOpenEvent),
     Close(WindowCloseEvent),

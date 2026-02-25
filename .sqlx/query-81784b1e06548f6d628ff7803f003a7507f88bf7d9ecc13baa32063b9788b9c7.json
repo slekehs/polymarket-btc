@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n            INSERT INTO windows (\n                market_id, opened_at, closed_at, duration_ms,\n                yes_ask, no_ask, combined_cost, spread_size, spread_category\n            ) VALUES (?, ?, NULL, NULL, ?, ?, ?, ?, ?)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "81784b1e06548f6d628ff7803f003a7507f88bf7d9ecc13baa32063b9788b9c7"
+}
