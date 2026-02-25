@@ -38,6 +38,10 @@ pub struct SpreadDetector {
     window_tx: mpsc::Sender<WindowEvent>,
     /// market_id → active window state
     active_windows: HashMap<String, ActiveWindow>,
+    /// Detector-local price cache: asset_id → (best_ask, best_bid).
+    /// Ensures spread is computed from prices in strict message order,
+    /// avoiding the race where the shared store is updated ahead of us.
+    local_prices: HashMap<String, (f64, f64)>,
     /// Count of price_change messages processed (for diagnostics).
     price_msgs_processed: u64,
     /// Whether the 10s readiness snapshot has been logged.
@@ -65,6 +69,7 @@ impl SpreadDetector {
             trade_rx,
             window_tx,
             active_windows: HashMap::new(),
+            local_prices: HashMap::new(),
             price_msgs_processed: 0,
             startup_logged: false,
             started_at: now,
@@ -200,17 +205,30 @@ impl SpreadDetector {
     async fn handle_price_change(&mut self, msg: PriceChangeMsg) {
         self.price_msgs_processed += 1;
 
-        // Update store with latest price
-        self.store.update_token_price(&msg.asset_id, msg.best_ask, msg.best_bid);
+        // Update detector-local price cache (strict message order — no store race).
+        self.local_prices.insert(msg.asset_id.clone(), (msg.best_ask, msg.best_bid));
 
-        // Get both sides for the market this token belongs to
-        let Some((market_id, yes_ask, no_ask, _yes_bid, _no_bid)) = self.store.get_spread_inputs(&msg.asset_id) else {
+        // Look up market structure (immutable metadata, no price read).
+        let Some((market_id, yes_token_id, no_token_id)) = self.store.get_market_for_token(&msg.asset_id) else {
             debug!(
                 asset_id = %msg.asset_id,
-                "spread_inputs missing: token has no counterpart in store yet"
+                "market lookup failed: token not in store"
             );
             return;
         };
+
+        // Read both sides from local cache only — counterpart must have been
+        // received through the channel before we can compute a spread.
+        let Some(&(yes_ask, _)) = self.local_prices.get(&yes_token_id) else {
+            return;
+        };
+        let Some(&(no_ask, _)) = self.local_prices.get(&no_token_id) else {
+            return;
+        };
+
+        if yes_ask <= 0.0 || no_ask <= 0.0 {
+            return;
+        }
 
         let combined = yes_ask + no_ask;
         let spread = 1.0 - combined;
@@ -312,8 +330,7 @@ impl SpreadDetector {
     }
 
     fn handle_trade(&mut self, trade: TradeMsg) {
-        // Find which market this asset belongs to
-        if let Some((market_id, _, _, _, _)) = self.store.get_spread_inputs(&trade.asset_id) {
+        if let Some((market_id, _, _)) = self.store.get_market_for_token(&trade.asset_id) {
             if let Some(window) = self.active_windows.get_mut(&market_id) {
                 if !window.trade_event_fired {
                     window.trade_event_fired = true;
@@ -371,7 +388,7 @@ fn now_ns() -> u64 {
 mod tests {
     use super::*;
     use crate::state::MarketStore;
-    use crate::types::{Category, Market};
+    use crate::types::{Category, Market, OpenDurationClass};
 
     fn make_store_with_market() -> Arc<MarketStore> {
         let store = MarketStore::new();
@@ -400,20 +417,29 @@ mod tests {
     #[tokio::test]
     async fn single_tick_does_not_fire_open_event() {
         let store = make_store_with_market();
-        let (price_tx, price_rx) = mpsc::channel(16);
+        let (_price_tx, price_rx) = mpsc::channel(16);
         let (_trade_tx, trade_rx) = mpsc::channel(16);
         let (window_tx, mut window_rx) = mpsc::channel(16);
 
         let mut detector = SpreadDetector::new(store.clone(), price_rx, trade_rx, window_tx);
 
-        // yes=0.45, no=0.45 → spread=0.10 (arb)
+        // Seed no-side in detector's local cache
+        detector.handle_price_change(price_msg("no1", 0.45)).await;
+        // yes=0.45, no=0.45 → spread=0.10 (arb) — opens as pending
         detector.handle_price_change(price_msg("yes1", 0.45)).await;
-        store.update_token_price("no1", 0.45, 0.44);
-        // Immediately close on next tick
+        // Immediately close on next tick (only 1 arb tick)
         detector.handle_price_change(price_msg("yes1", 0.55)).await;
 
-        // No open event should have fired (only 1 tick before close)
-        assert!(window_rx.try_recv().is_err());
+        // Only a Close event should fire (classified SingleTick), never an Open.
+        let event = window_rx.try_recv().expect("expected Close event");
+        match event {
+            WindowEvent::Close(c) => {
+                assert_eq!(c.observables.tick_count, 1);
+                assert_eq!(c.open_duration_class, OpenDurationClass::SingleTick);
+            }
+            WindowEvent::Open(_) => panic!("single-tick window must not fire Open"),
+        }
+        assert!(window_rx.try_recv().is_err(), "no further events expected");
     }
 
     #[tokio::test]
@@ -425,8 +451,8 @@ mod tests {
 
         let mut detector = SpreadDetector::new(store.clone(), price_rx, trade_rx, window_tx);
 
-        // Seed no-side price first
-        store.update_token_price("no1", 0.45, 0.44);
+        // Seed no-side in detector's local cache
+        detector.handle_price_change(price_msg("no1", 0.45)).await;
 
         // Tick 1: spread opens (pending)
         detector.handle_price_change(price_msg("yes1", 0.45)).await;

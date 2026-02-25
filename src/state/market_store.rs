@@ -251,6 +251,16 @@ impl MarketStore {
         Some((market_id, yes_state.best_ask, no_state.best_ask, yes_state.best_bid, no_state.best_bid))
     }
 
+    /// Returns (market_id, yes_token_id, no_token_id) for the market that owns `asset_id`,
+    /// without reading any prices. Used by the detector's local price cache.
+    pub fn get_market_for_token(&self, asset_id: &str) -> Option<(String, String, String)> {
+        let token_ref = self.token_to_market.get(asset_id)?;
+        let market_id = token_ref.market_id.clone();
+        drop(token_ref);
+        let market = self.markets.get(&market_id)?;
+        Some((market_id, market.yes_token_id.clone(), market.no_token_id.clone()))
+    }
+
     pub fn get_market(&self, market_id: &str) -> Option<Market> {
         self.markets.get(market_id).map(|m| m.clone())
     }
