@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "\n                    INSERT OR IGNORE INTO markets (id, question, category, end_date_iso, total_volume, created_at)\n                    VALUES (?, ?, ?, ?, ?, ?)\n                    ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": []
+  },
+  "hash": "4f99554dedbae085f135554c65626a40ac1a65ecb039ab207ba5dfd94f192671"
+}

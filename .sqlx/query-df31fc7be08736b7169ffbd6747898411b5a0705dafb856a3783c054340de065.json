@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT AVG(duration_ms) as \"avg: f64\" FROM windows WHERE opened_at > ? AND duration_ms IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "avg: f64",
+        "ordinal": 0,
+        "type_info": "Null"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "df31fc7be08736b7169ffbd6747898411b5a0705dafb856a3783c054340de065"
+}

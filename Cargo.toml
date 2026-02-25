@@ -1,0 +1,47 @@
+[package]
+name = "polymarket-scanner"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "scanner"
+path = "src/main.rs"
+
+[[bin]]
+name = "tui"
+path = "src/bin/tui.rs"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# WebSocket
+tokio-tungstenite = { version = "0.24", features = ["native-tls"] }
+
+# HTTP client (REST bootstrap only)
+reqwest = { version = "0.12", features = ["json", "native-tls"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# Database
+sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio", "macros", "migrate"] }
+
+# HTTP server
+axum = { version = "0.7", features = ["macros"] }
+
+# Concurrency — in-memory market state
+dashmap = "6"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+
+# Errors
+thiserror = "2"
+
+# Misc
+futures-util = "0.3"
+ratatui = "0.30.0"
+crossterm = "0.29.0"

@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "\n        SELECT id, market_id, opened_at, closed_at, duration_ms,\n               spread_size, spread_category, open_duration_class, close_reason, opportunity_class\n        FROM windows\n        WHERE market_id = ? AND opened_at > ?\n        ORDER BY opened_at DESC\n        LIMIT ?\n        ",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "market_id",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "opened_at",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "closed_at",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "duration_ms",
+        "ordinal": 4,
+        "type_info": "Float"
+      },
+      {
+        "name": "spread_size",
+        "ordinal": 5,
+        "type_info": "Float"
+      },
+      {
+        "name": "spread_category",
+        "ordinal": 6,
+        "type_info": "Text"
+      },
+      {
+        "name": "open_duration_class",
+        "ordinal": 7,
+        "type_info": "Text"
+      },
+      {
+        "name": "close_reason",
+        "ordinal": 8,
+        "type_info": "Text"
+      },
+      {
+        "name": "opportunity_class",
+        "ordinal": 9,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      true,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "bd00ab1f969e209330f9359a6410fffe457c17e229581aa55e1cd9e6064aafee"
+}

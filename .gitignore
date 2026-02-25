@@ -1,8 +1,12 @@
 node_modules/
 dist/
-.env
-.env.example
-arb_log.csv
-scanner.log
 *.log
+*.db
+scanner_opportunities.json
+scanner_summary.json
 .cursor/
+polymarket-scanner-prd-v1.md
+polymarket-dashboard-prd-v1.md
+# Added by cargo
+
+/target
